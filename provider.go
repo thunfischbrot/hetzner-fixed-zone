@@ -3,6 +3,7 @@ package hetzner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 
@@ -74,6 +75,8 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 	hcloudZone, _, err := p.getClient().Zone.Get(ctx, unFQDN(zone))
 	if err != nil {
 		return nil, err
+	} else if hcloudZone == nil {
+		return nil, fmt.Errorf("zone '%s' not found at Hetzner", zone)
 	}
 
 	sets, err := p.getClient().Zone.AllRRSets(ctx, hcloudZone)
