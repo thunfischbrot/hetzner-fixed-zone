@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
@@ -63,6 +64,44 @@ func (p *Provider) getClient() *hcloud.Client {
 	return p.client
 }
 
+// getZoneFromFQDN resolve domain from zone using lookup + longest-suffix match.
+// handles subdomain delegation: "*.sub.0testing.eu" finds "0testing.eu" when that's the only zone,
+// but prefers "sub.0testing.eu" if both exist (longest wins).
+func (p *Provider) getZoneFromFQDN(ctx context.Context, domain string) (*hcloud.Zone, error) {
+	zones, err := p.getClient().Zone.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return getZoneFromList(domain, zones)
+}
+
+// getZoneFromList does the actual suffix matching math. strip trailing dots,
+// walk zone list,  return longest match.
+func getZoneFromList(domain string, zones []*hcloud.Zone) (*hcloud.Zone, error) {
+	domain = unFQDN(domain)
+
+	var bestZone *hcloud.Zone
+	var longestMatch int
+
+	for _, zone := range zones {
+		zoneName := unFQDN(zone.Name)
+
+		if domain == zoneName || strings.HasSuffix(domain, "."+zoneName) {
+			if len(zoneName) > longestMatch {
+				longestMatch = len(zoneName)
+				bestZone = zone
+			}
+		}
+	}
+
+	if bestZone == nil {
+		return nil, fmt.Errorf("this should not happen: no matching zone found for domain '%s'", domain)
+	}
+
+	return bestZone, nil
+}
+
 // GetRecords returns all the records in the DNS zone. This function fulfills the libdns.RecordGetter interface.
 //
 // This implementation includes DNSSEC-related records.
@@ -72,11 +111,9 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 		return nil, err
 	}
 
-	hcloudZone, _, err := p.getClient().Zone.Get(ctx, unFQDN(zone))
+	hcloudZone, err := p.getZoneFromFQDN(ctx, zone)
 	if err != nil {
 		return nil, err
-	} else if hcloudZone == nil {
-		return nil, fmt.Errorf("zone '%s' not found at Hetzner", zone)
 	}
 
 	sets, err := p.getClient().Zone.AllRRSets(ctx, hcloudZone)
@@ -126,6 +163,11 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 		return nil, err
 	}
 
+	hcloudZone, err := p.getZoneFromFQDN(ctx, zone)
+	if err != nil {
+		return nil, err
+	}
+
 	var actions []*hcloud.Action
 
 	for _, record := range records {
@@ -136,7 +178,7 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 			return nil, err
 		}
 
-		set := fromRecord(zone, record)
+		set := fromRecord(hcloudZone.Name, record)
 
 		action, _, err := p.getClient().Zone.AddRRSetRecords(ctx, set, hcloud.ZoneRRSetAddRecordsOpts{
 			Records: set.Records,
@@ -165,6 +207,11 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 		return nil, err
 	}
 
+	hcloudZone, err := p.getZoneFromFQDN(ctx, zone)
+	if err != nil {
+		return nil, err
+	}
+
 	type rrset struct {
 		Name string
 		Type string
@@ -181,7 +228,7 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 			return nil, err
 		}
 
-		set := fromRecord(zone, record)
+		set := fromRecord(hcloudZone.Name, record)
 
 		key := rrset{
 			Name: set.Name,
@@ -213,9 +260,7 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 			}
 		}
 
-		createRes, _, err := p.getClient().Zone.CreateRRSet(ctx, &hcloud.Zone{
-			Name: unFQDN(zone),
-		}, hcloud.ZoneRRSetCreateOpts{
+		createRes, _, err := p.getClient().Zone.CreateRRSet(ctx, hcloudZone, hcloud.ZoneRRSetCreateOpts{
 			Name:    set.Name,
 			Type:    set.Type,
 			TTL:     set.TTL,
@@ -243,6 +288,11 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []lib
 		return nil, err
 	}
 
+	hcloudZone, err := p.getZoneFromFQDN(ctx, zone)
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		deleted []libdns.Record
 		actions []*hcloud.Action
@@ -256,7 +306,7 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []lib
 			return nil, err
 		}
 
-		set := fromRecord(zone, record)
+		set := fromRecord(hcloudZone.Name, record)
 
 		action, _, err := p.getClient().Zone.RemoveRRSetRecords(ctx, set, hcloud.ZoneRRSetRemoveRecordsOpts{
 			Records: set.Records,
