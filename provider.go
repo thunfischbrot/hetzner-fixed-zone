@@ -4,6 +4,7 @@ package hetzner
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -85,9 +86,10 @@ func getZoneFromList(domain string, zones []*hcloud.Zone) (*hcloud.Zone, error) 
 	var longestMatch int
 
 	for _, zone := range zones {
+		log.Printf("DEBUG: checking zone=%s", zone.Name)
 		zoneName := unFQDN(zone.Name)
-
 		if domain == zoneName || strings.HasSuffix(domain, "."+zoneName) {
+			log.Printf("DEBUG: zone %s matches!", zone.Name)
 			if len(zoneName) > longestMatch {
 				longestMatch = len(zoneName)
 				bestZone = zone
@@ -98,7 +100,7 @@ func getZoneFromList(domain string, zones []*hcloud.Zone) (*hcloud.Zone, error) 
 	if bestZone == nil {
 		return nil, fmt.Errorf("this should not happen: no matching zone found for domain '%s'", domain)
 	}
-
+	log.Printf("DEBUG: selected zone=%s", bestZone.Name)
 	return bestZone, nil
 }
 
