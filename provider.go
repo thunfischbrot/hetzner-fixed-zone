@@ -192,7 +192,29 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 		}
 		log.Printf("DEBUG AppendRecords: using zone=%s for record %s", hcloudZone.Name, rr.Name)
 
-		set := fromRecord(hcloudZone.Name, record)
+		// make record name relative to ACTUAL zone found (not input zone)
+		// "_acme-challenge.sub.test.0testing.eu." w/ zone "0testing.eu" → "_acme-challenge.sub.test"
+		zoneSuffix := "." + unFQDN(hcloudZone.Name)
+		fullDomainNoDot := unFQDN(fullDomain)
+		relativeName := rr.Name
+		if strings.HasSuffix(fullDomainNoDot, zoneSuffix) {
+			relativeName = strings.TrimSuffix(fullDomainNoDot, zoneSuffix)
+		}
+		log.Printf("DEBUG AppendRecords: adjusted record name from %s to %s", rr.Name, relativeName)
+
+		// rebuild record w/ adjusted name
+		adjustedRR := libdns.RR{
+			Name: relativeName,
+			Type: rr.Type,
+			TTL:  rr.TTL,
+			Data: rr.Data,
+		}
+		adjustedRecord, err := adjustedRR.Parse()
+		if err != nil {
+			return nil, err
+		}
+
+		set := fromRecord(hcloudZone.Name, adjustedRecord)
 
 		action, _, err := p.getClient().Zone.AddRRSetRecords(ctx, set, hcloud.ZoneRRSetAddRecordsOpts{
 			Records: set.Records,
@@ -257,7 +279,27 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 			zoneCache[fullDomain] = hcloudZone
 		}
 
-		set := fromRecord(hcloudZone.Name, record)
+		// make record name relative to actual zone
+		zoneSuffix := "." + unFQDN(hcloudZone.Name)
+		fullDomainNoDot := unFQDN(fullDomain)
+		relativeName := rr.Name
+		if strings.HasSuffix(fullDomainNoDot, zoneSuffix) {
+			relativeName = strings.TrimSuffix(fullDomainNoDot, zoneSuffix)
+		}
+
+		// rebuild record w/ adjusted name
+		adjustedRR := libdns.RR{
+			Name: relativeName,
+			Type: rr.Type,
+			TTL:  rr.TTL,
+			Data: rr.Data,
+		}
+		adjustedRecord, err := adjustedRR.Parse()
+		if err != nil {
+			return nil, err
+		}
+
+		set := fromRecord(hcloudZone.Name, adjustedRecord)
 
 		key := rrset{
 			Name:     set.Name,
@@ -344,7 +386,27 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []lib
 			return nil, err
 		}
 
-		set := fromRecord(hcloudZone.Name, record)
+		// make record name relative to actual zone
+		zoneSuffix := "." + unFQDN(hcloudZone.Name)
+		fullDomainNoDot := unFQDN(fullDomain)
+		relativeName := rr.Name
+		if strings.HasSuffix(fullDomainNoDot, zoneSuffix) {
+			relativeName = strings.TrimSuffix(fullDomainNoDot, zoneSuffix)
+		}
+
+		// rebuild record w/ adjusted name
+		adjustedRR := libdns.RR{
+			Name: relativeName,
+			Type: rr.Type,
+			TTL:  rr.TTL,
+			Data: rr.Data,
+		}
+		adjustedRecord, err := adjustedRR.Parse()
+		if err != nil {
+			return nil, err
+		}
+
+		set := fromRecord(hcloudZone.Name, adjustedRecord)
 
 		action, _, err := p.getClient().Zone.RemoveRRSetRecords(ctx, set, hcloud.ZoneRRSetRemoveRecordsOpts{
 			Records: set.Records,
