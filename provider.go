@@ -160,6 +160,7 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 func (p *Provider) AppendRecords(ctx context.Context, zone string, records []libdns.Record) (
 	[]libdns.Record, error,
 ) {
+	log.Printf("DEBUG AppendRecords: zone=%s, records=%d", zone, len(records))
 	zone, err := idna.Lookup.ToASCII(zone)
 	if err != nil {
 		return nil, err
@@ -169,6 +170,7 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("DEBUG AppendRecords: using zone=%s", hcloudZone.Name)
 
 	var actions []*hcloud.Action
 
