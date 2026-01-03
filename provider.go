@@ -166,12 +166,6 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 		return nil, err
 	}
 
-	hcloudZone, err := p.getZoneFromFQDN(ctx, zone)
-	if err != nil {
-		return nil, err
-	}
-	log.Printf("DEBUG AppendRecords: using zone=%s", hcloudZone.Name)
-
 	var actions []*hcloud.Action
 
 	for _, record := range records {
@@ -181,6 +175,22 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 		if err != nil {
 			return nil, err
 		}
+
+		// build full FQDN from record+zone for proper zone matching
+		// e.g. "_acme-challenge.sub.test" + "0testing.eu." -> "_acme-challenge.sub.test.0testing.eu."
+		rr := record.RR()
+		fullDomain := rr.Name
+		if fullDomain != "" && !strings.HasSuffix(fullDomain, ".") {
+			fullDomain = fullDomain + "."
+		}
+		fullDomain = fullDomain + zone
+		log.Printf("DEBUG AppendRecords: finding zone for full domain=%s", fullDomain)
+
+		hcloudZone, err := p.getZoneFromFQDN(ctx, fullDomain)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("DEBUG AppendRecords: using zone=%s for record %s", hcloudZone.Name, rr.Name)
 
 		set := fromRecord(hcloudZone.Name, record)
 
@@ -211,17 +221,14 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 		return nil, err
 	}
 
-	hcloudZone, err := p.getZoneFromFQDN(ctx, zone)
-	if err != nil {
-		return nil, err
-	}
-
 	type rrset struct {
-		Name string
-		Type string
+		Name     string
+		Type     string
+		ZoneName string
 	}
 
 	sets := make(map[rrset]*hcloud.ZoneRRSet)
+	zoneCache := make(map[string]*hcloud.Zone)
 
 	// Group records by RRset.
 	for _, record := range records {
@@ -232,11 +239,30 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 			return nil, err
 		}
 
+		// build full FQDN from record & zone for proper zone matching
+		rr := record.RR()
+		fullDomain := rr.Name
+		if fullDomain != "" && !strings.HasSuffix(fullDomain, ".") {
+			fullDomain = fullDomain + "."
+		}
+		fullDomain = fullDomain + zone
+
+		// cache zone lookups to dodge redundant api calls
+		hcloudZone, ok := zoneCache[fullDomain]
+		if !ok {
+			hcloudZone, err = p.getZoneFromFQDN(ctx, fullDomain)
+			if err != nil {
+				return nil, err
+			}
+			zoneCache[fullDomain] = hcloudZone
+		}
+
 		set := fromRecord(hcloudZone.Name, record)
 
 		key := rrset{
-			Name: set.Name,
-			Type: string(set.Type),
+			Name:     set.Name,
+			Type:     string(set.Type),
+			ZoneName: hcloudZone.Name,
 		}
 
 		if _, ok := sets[key]; !ok {
@@ -264,7 +290,7 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 			}
 		}
 
-		createRes, _, err := p.getClient().Zone.CreateRRSet(ctx, hcloudZone, hcloud.ZoneRRSetCreateOpts{
+		createRes, _, err := p.getClient().Zone.CreateRRSet(ctx, set.Zone, hcloud.ZoneRRSetCreateOpts{
 			Name:    set.Name,
 			Type:    set.Type,
 			TTL:     set.TTL,
@@ -292,11 +318,6 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []lib
 		return nil, err
 	}
 
-	hcloudZone, err := p.getZoneFromFQDN(ctx, zone)
-	if err != nil {
-		return nil, err
-	}
-
 	var (
 		deleted []libdns.Record
 		actions []*hcloud.Action
@@ -306,6 +327,19 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []lib
 		// records are not always concrete types (libdns.Address, libdns.TXT, ...) but instead of type libdns.RR.
 		// Parse them again so the type-switch in fromRecord() works correctly.
 		record, err := record.RR().Parse()
+		if err != nil {
+			return nil, err
+		}
+
+		// build full FQDN from record & zone for proper zone matching
+		rr := record.RR()
+		fullDomain := rr.Name
+		if fullDomain != "" && !strings.HasSuffix(fullDomain, ".") {
+			fullDomain = fullDomain + "."
+		}
+		fullDomain = fullDomain + zone
+
+		hcloudZone, err := p.getZoneFromFQDN(ctx, fullDomain)
 		if err != nil {
 			return nil, err
 		}
